@@ -19,6 +19,18 @@ pub enum WildcardingError {
 
     /// The target is invalid.
     InvalidTarget(PathBuf),
+
+    /// Failed to get the name of the file.
+    FilenameFail(PathBuf),
+
+    /// Failed to get the filename as an string.
+    InvalidPath(PathBuf),
+
+    /// Missing the parent of a file.
+    NoParent(PathBuf),
+
+    /// Can't read the directory.
+    ReadError(PathBuf),
 }
 
 /// Copy a file (with or without a wildcard) to a target.
@@ -90,7 +102,9 @@ where
         + std::marker::Copy,
 {
     if target.is_dir() {
-        let filename = source.file_name().unwrap();
+        let filename = source
+            .file_name()
+            .ok_or_else(|| WildcardingError::FilenameFail(source.to_path_buf()))?;
         let new_target = target.join(&filename);
         tracing::debug!(?source, ?new_target);
         op(source, &new_target)
@@ -123,16 +137,28 @@ where
         + std::marker::Copy,
 {
     if let Some(name) = source.file_name() {
-        if name.to_str().unwrap().contains("*") {
-            let source = source.parent().unwrap();
-            let re = Regex::new(&name.to_str().unwrap().replace("*", ".*")).unwrap();
+        let as_str = name
+            .to_str()
+            .ok_or_else(|| WildcardingError::InvalidPath(source.to_path_buf()))?;
+        if as_str.contains("*") {
+            let source = source
+                .parent()
+                .ok_or_else(|| WildcardingError::NoParent(source.to_path_buf()))?;
+            let re = Regex::new(&as_str.replace("*", ".*")).unwrap();
 
-            let mut reader = tokio::fs::read_dir(&source).await.unwrap();
+            let mut reader = tokio::fs::read_dir(&source)
+                .await
+                .map_err(|_| WildcardingError::ReadError(source.to_path_buf()))?;
             while let Ok(Some(entry)) = reader.next_entry().await {
                 let entry = entry.path();
                 if entry.is_file() {
                     if let Some(name) = entry.file_name() {
-                        if re.is_match(name.to_str().unwrap()) {
+                        let as_str = name
+                            .to_str()
+                            .ok_or_else(|| WildcardingError::InvalidPath(entry.to_path_buf()))?;
+                        println!("re={re:?}, name={name:?}, as_str={as_str}");
+                        if re.is_match(as_str) {
+                            println!("Match!");
                             do_on_file(&source.join(name), target, op).await?;
                         }
                     }
@@ -154,7 +180,7 @@ mod test {
     #[tokio::test]
     async fn copy_file_to_file() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("file-to-file");
+        let wd = temp.join("cp-file-to-file");
         tokio::fs::create_dir_all(&wd).await.unwrap();
 
         tokio::fs::write(wd.join("source"), "this is source")
@@ -171,7 +197,7 @@ mod test {
     #[tokio::test]
     async fn copy_file_to_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("file-to-dir");
+        let wd = temp.join("cp-file-to-dir");
         tokio::fs::create_dir_all(&wd).await.unwrap();
 
         tokio::fs::write(wd.join("source"), "this is source")
@@ -190,7 +216,7 @@ mod test {
     #[tokio::test]
     async fn copy_dir_to_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("dir-to-dir");
+        let wd = temp.join("cp-dir-to-dir");
         let source = wd.join("source");
         let target = wd.join("target");
         tokio::fs::create_dir_all(&source).await.unwrap();
@@ -214,7 +240,7 @@ mod test {
     #[tokio::test]
     async fn copy_mask_to_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("mask-to-dir");
+        let wd = temp.join("cp-mask-to-dir");
         let source = wd.join("source");
         let target = wd.join("target");
 
@@ -237,13 +263,38 @@ mod test {
         assert!(target.join("file2.txt").is_file());
         assert!(!target.join("file1.glob").is_file());
 
-        tokio::fs::remove_dir_all(wd).await.unwrap();
+        tokio::fs::remove_dir_all(&wd).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_star() {
+        let temp = std::env::temp_dir();
+        let wd = temp.join("cp-mask-star");
+        let source = wd.join("source");
+        let target = wd.join("target");
+
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::create_dir_all(&target).await.unwrap();
+
+        tokio::fs::write(source.join("file1"), "this is 1")
+            .await
+            .unwrap();
+        tokio::fs::write(source.join("file2"), "this is 2")
+            .await
+            .unwrap();
+
+        cp(&source.join("*"), &target).await.unwrap();
+
+        assert!(target.join("file1").is_file());
+        assert!(target.join("file2").is_file());
+
+        tokio::fs::remove_dir_all(&wd).await.unwrap();
     }
 
     #[tokio::test]
     async fn move_file_to_file() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("m-file-to-file");
+        let wd = temp.join("mv-file-to-file");
 
         tokio::fs::create_dir_all(&wd).await.unwrap();
 
@@ -263,7 +314,7 @@ mod test {
     #[tokio::test]
     async fn move_file_to_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("m-file-to-dir");
+        let wd = temp.join("mv-file-to-dir");
 
         let target = wd.join("target");
 
@@ -284,7 +335,7 @@ mod test {
     #[tokio::test]
     async fn move_dir_to_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("m-dir-to-dir");
+        let wd = temp.join("mv-dir-to-dir");
 
         let source = wd.join("source");
         let target = wd.join("target");
@@ -312,7 +363,7 @@ mod test {
     #[tokio::test]
     async fn move_mask_to_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("m-mask-to-dir");
+        let wd = temp.join("mv-mask-to-dir");
 
         let source = wd.join("source");
         let target = wd.join("target");
@@ -346,7 +397,7 @@ mod test {
     #[tokio::test]
     async fn remove_file() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("d-file");
+        let wd = temp.join("del-file");
 
         let source = wd.join("source");
         let file = source.join("file.txt");
@@ -363,7 +414,7 @@ mod test {
     #[tokio::test]
     async fn remove_dir() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("d-dir");
+        let wd = temp.join("del-dir");
         let source = wd.join("source");
         let file = source.join("file1.txt");
 
@@ -382,7 +433,7 @@ mod test {
     #[tokio::test]
     async fn remove_mask() {
         let temp = std::env::temp_dir();
-        let wd = temp.join("d-mask");
+        let wd = temp.join("del-mask");
         let source = wd.join("source");
         let file1 = source.join("file1.txt");
         let file2 = source.join("file2.txt");
