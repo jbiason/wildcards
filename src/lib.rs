@@ -156,9 +156,7 @@ where
                         let as_str = name
                             .to_str()
                             .ok_or_else(|| WildcardingError::InvalidPath(entry.to_path_buf()))?;
-                        println!("re={re:?}, name={name:?}, as_str={as_str}");
                         if re.is_match(as_str) {
-                            println!("Match!");
                             do_on_file(&source.join(name), target, op).await?;
                         }
                     }
