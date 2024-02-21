@@ -93,6 +93,52 @@ pub async fn rm(source: &Path) -> Result<(), WildcardingError> {
     }
 }
 
+/// Create a symlink from the source to the target (with or without a wildcard).
+/// This is the Linux version.
+#[cfg(target_os = "linux")]
+pub async fn ln(source: &Path, target: &Path) -> Result<(), WildcardingError> {
+    tracing::debug!(?source, ?target);
+    let operation = |source: &Path, target: &Path| {
+        std::os::unix::fs::symlink(source, target).map_err(move |_| {
+            WildcardingError::OperationFailed(source.to_path_buf(), target.to_path_buf())
+        })
+    };
+
+    match (source.is_file(), source.is_dir()) {
+        (true, true) => Err(WildcardingError::UnknownFormat(source.to_path_buf())),
+        (true, false) => do_on_file(source, target, operation).await,
+        (false, true) => do_on_dir(source, target, operation).await,
+        (false, false) => do_on_mask(source, target, operation).await,
+    }
+}
+
+/// Create a symlink from the source to the target (with or without a wildcard).
+/// This is the Windows version.
+#[cfg(target_os = "windows")]
+pub async fn ln(source: &Path, target: &Path) -> Result<(), WildcardingError> {
+    tracing::debug!(?source, ?target);
+    let operation = |source: &Path, target: &Path| {
+        if source.is_file() {
+            std::os::windows::fs::symlink_file(source, target).map_err(move |_| {
+                WildcardingError::OperationFailed(source.to_path_buf(), target.to_path_buf())
+            })
+        } else if source.is_dir() {
+            std::os::windows::fs::symlink_dir(source, target).map_err(move |_| {
+                WildcardingError::OperationFailed(source.to_path_buf(), target.to_path_buf())
+            })
+        } else {
+            WildcardingError::UnknownFormat(source.to_path_buf())
+        }
+    };
+
+    match (source.is_file(), source.is_dir()) {
+        (true, true) => Err(WildcardingError::UnknownFormat(source.to_path_buf())),
+        (true, false) => do_on_file(source, target, operation).await,
+        (false, true) => do_on_dir(source, target, operation).await,
+        (false, false) => do_on_mask(source, target, operation).await,
+    }
+}
+
 /// Act on a file.
 async fn do_on_file<T>(source: &Path, target: &Path, op: T) -> Result<(), WildcardingError>
 where
