@@ -99,6 +99,14 @@ pub async fn rm(source: &Path) -> Result<(), WildcardingError> {
 pub async fn ln(source: &Path, target: &Path) -> Result<(), WildcardingError> {
     tracing::debug!(?source, ?target);
     let operation = |source: &Path, target: &Path| {
+        if target.exists() {
+            if target.is_symlink() {
+                std::fs::remove_file(&target)
+                    .map_err(|_| WildcardingError::InvalidTarget(target.to_path_buf()))?;
+            } else {
+                return Err(WildcardingError::InvalidTarget(target.to_path_buf()));
+            }
+        }
         std::os::unix::fs::symlink(source, target).map_err(move |_| {
             WildcardingError::OperationFailed(source.to_path_buf(), target.to_path_buf())
         })
@@ -118,6 +126,17 @@ pub async fn ln(source: &Path, target: &Path) -> Result<(), WildcardingError> {
 pub async fn ln(source: &Path, target: &Path) -> Result<(), WildcardingError> {
     tracing::debug!(?source, ?target);
     let operation = |source: &Path, target: &Path| {
+        if target.exists() {
+            // XXX I'm not really sure if this will actually work, as symlinks in Windows are a
+            // complete different beast, and you have two different calls to create symlinks.
+            if target.is_symlink() {
+                std::fs::remove_file(&target)
+                    .map_err(|_| WildcardingError::InvalidTarget(target.to_path_buf()))?;
+            } else {
+                return Err(WildcardingError::InvalidTarget(target.to_path_buf()));
+            }
+        }
+
         if source.is_file() {
             std::os::windows::fs::symlink_file(source, target).map_err(move |_| {
                 WildcardingError::OperationFailed(source.to_path_buf(), target.to_path_buf())
