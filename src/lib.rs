@@ -121,9 +121,17 @@ where
         + std::marker::Sync
         + std::marker::Copy,
 {
-    if !target.is_dir() {
-        Err(WildcardingError::InvalidTarget(target.to_path_buf()))
+    if target.exists() {
+        if !target.is_dir() {
+            Err(WildcardingError::InvalidTarget(target.to_path_buf()))
+        } else {
+            do_on_mask(&source.join("*"), target, op).await
+        }
     } else {
+        // target does not exist, so we can just create it.
+        tokio::fs::create_dir_all(&target)
+            .await
+            .map_err(|_| WildcardingError::InvalidTarget(target.to_path_buf()))?;
         do_on_mask(&source.join("*"), target, op).await
     }
 }
@@ -231,6 +239,25 @@ mod test {
 
         assert!(target.join("file1").is_file());
         assert!(target.join("file2").is_file());
+
+        tokio::fs::remove_dir_all(wd).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_dir_to_new_dir() {
+        let temp = std::env::temp_dir();
+        let wd = temp.join("cp-dir-to-new-dir");
+        let source = wd.join("source");
+        let target = wd.join("target");
+
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::write(source.join("file1"), "this is 1")
+            .await
+            .unwrap();
+
+        cp(&source, &target).await.unwrap();
+
+        assert!(target.join("file1").is_file());
 
         tokio::fs::remove_dir_all(wd).await.unwrap();
     }
