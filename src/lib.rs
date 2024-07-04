@@ -93,7 +93,7 @@ pub async fn rm(source: &Path) -> Result<(), WildcardingError> {
     }
 }
 
-/// Act on a file.
+/// Apply the operation on a target file.
 async fn do_on_file<T>(source: &Path, target: &Path, op: T) -> Result<(), WildcardingError>
 where
     T: Fn(&Path, &Path) -> Result<(), WildcardingError>
@@ -113,7 +113,7 @@ where
     }
 }
 
-/// Act on a directory.
+/// Apply the operation on a target directory.
 async fn do_on_dir<T>(source: &Path, target: &Path, op: T) -> Result<(), WildcardingError>
 where
     T: Fn(&Path, &Path) -> Result<(), WildcardingError>
@@ -167,6 +167,13 @@ where
                         if re.is_match(as_str) {
                             do_on_file(&source.join(name), target, op).await?;
                         }
+                    }
+                } else if entry.is_dir() {
+                    if let Some(name) = entry.file_name() {
+                        let new_source = source.join(name); // .join("*");
+                        let new_target = target.join(name);
+                        tracing::debug!(?source, ?new_source, ?target, ?new_target);
+                        Box::pin(do_on_dir(&new_source, &new_target, op)).await?;
                     }
                 }
             }
@@ -317,6 +324,44 @@ mod test {
     }
 
     #[tokio::test]
+    async fn copy_r_recursive() {
+        let temp = std::env::temp_dir();
+        let wd = temp.join("cp-r-recursive");
+
+        tokio::fs::create_dir_all(&wd).await.unwrap();
+
+        let source = wd.join("source");
+        let target = wd.join("target");
+
+        let inner_source = source.join("inner");
+        let inner_file = inner_source.join("this-is-file");
+        let inner_inner = inner_source.join("more-inner");
+        let inner_inner_file = inner_inner.join("this");
+
+        tokio::fs::create_dir_all(inner_source).await.unwrap();
+        tokio::fs::create_dir_all(inner_inner).await.unwrap();
+        tokio::fs::write(&inner_file, "this is file").await.unwrap();
+        tokio::fs::write(&inner_inner_file, "another file")
+            .await
+            .unwrap();
+
+        cp(&source, &target).await.unwrap();
+
+        let expected_target1 = target.join("inner").join("this-is-file");
+        let expected_target2 = target.join("inner").join("more-inner").join("this");
+        assert!(expected_target1.is_file());
+        assert!(expected_target2.is_file());
+
+        let content = tokio::fs::read(&expected_target1).await.unwrap();
+        assert_eq!(std::str::from_utf8(&content).unwrap(), "this is file");
+
+        let content = tokio::fs::read(&expected_target2).await.unwrap();
+        assert_eq!(std::str::from_utf8(&content).unwrap(), "another file");
+
+        tokio::fs::remove_dir_all(&wd).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn move_file_to_file() {
         let temp = std::env::temp_dir();
         let wd = temp.join("mv-file-to-file");
@@ -383,6 +428,38 @@ mod test {
         assert!(target.join("file2.txt").is_file());
 
         tokio::fs::remove_dir_all(wd).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn move_recursive() {
+        let temp = std::env::temp_dir();
+        let wd = temp.join("mv-recursive");
+
+        let source = wd.join("source");
+        let target = wd.join("target");
+        let source_inner = source.join("inner");
+        let source_inner_inner = source_inner.join("more-inner");
+
+        tokio::fs::create_dir_all(&source_inner_inner)
+            .await
+            .unwrap();
+
+        tokio::fs::write(source_inner.join("this-is-file"), "this is file")
+            .await
+            .unwrap();
+        tokio::fs::write(source_inner_inner.join("another-file"), "another")
+            .await
+            .unwrap();
+
+        mv(&source, &target).await.unwrap();
+
+        let target_file = target.join("inner").join("this-is-file");
+        assert!(target_file.is_file());
+
+        let target_another = target.join("inner").join("more-inner").join("another-file");
+        assert!(target_another.is_file());
+
+        tokio::fs::remove_dir_all(&wd).await.unwrap();
     }
 
     #[tokio::test]
